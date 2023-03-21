@@ -19,12 +19,31 @@
 #include "mountpoint-util.h"
 #include "namespace-util.h"
 #include "path-util.h"
+#include "proc-cmdline.h"
 #include "process-util.h"
 #include "stat-util.h"
 #include "string-util.h"
 #include "sync-util.h"
 #include "umask-util.h"
 #include "virt.h"
+
+static char *machine_uuid = NULL;
+
+static int parse_proc_cmdline_item(const char *key, const char *value, void *data) {
+        int r;
+
+        if (proc_cmdline_key_streq(key, "machine_uuid")) {
+
+                if (proc_cmdline_value_missing(key, value))
+                        return 0;
+
+                r = free_and_strdup(&machine_uuid, value);
+                if (r < 0)
+                        return log_oom();
+        }
+
+        return 0;
+}
 
 static int generate_machine_id(const char *root, sd_id128_t *ret) {
         const char *dbus_machine_id;
@@ -33,7 +52,17 @@ static int generate_machine_id(const char *root, sd_id128_t *ret) {
 
         assert(ret);
 
-        /* First, try reading the D-Bus machine id, unless it is a symlink */
+        /* First, try reading cmdline for machine-id */
+        r = proc_cmdline_parse(parse_proc_cmdline_item, NULL, PROC_CMDLINE_STRIP_RD_PREFIX);
+        if (r < 0)
+                log_warning_errno(r, "Failed to parse kernel command line, ignoring: %m");
+
+        if (machine_uuid && sd_id128_from_string(machine_uuid, ret) >= 0) {
+                log_info("Initializing machine ID from machine_uuid.");
+                return 0;
+        }
+
+        /* Try reading the D-Bus machine id, unless it is a symlink */
         dbus_machine_id = prefix_roota(root, "/var/lib/dbus/machine-id");
         fd = open(dbus_machine_id, O_RDONLY|O_CLOEXEC|O_NOCTTY|O_NOFOLLOW);
         if (fd >= 0) {
